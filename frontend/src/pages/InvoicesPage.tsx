@@ -1,6 +1,6 @@
-import { useContext, useState, useEffect, useMemo } from "react";
+import { useContext, useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { AppContext, type InvoiceItem } from "../context/AppContext";
+import { AppContext, type InvoiceItem, type Question, type AnswerValue } from "../context/AppContext";
 import { API } from "../config";
 import downloadBlob from "../utils/downloadBlob";
 
@@ -47,16 +47,21 @@ export default function InvoicesPage() {
       const r = await fetch(`${API}/session/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: filtered, year: filterStart?.substring(0, 4) || "", month: filterStart?.substring(4, 6) || "" }),
+        body: JSON.stringify({ items: filtered, start_date: filterStart || "", end_date: filterEnd || "" }),
       });
       if (!r.ok) {
         const errData = await r.json() as { detail?: string };
         throw new Error(errData.detail || "啟動問卷失敗");
       }
-      const data = await r.json() as { session_id: string; questions: string[] };
+      const data = await r.json() as { session_id: string; questions: Question[] };
       setQsSessionId(data.session_id);
-      const qMap: Record<string, string> = {};
-      data.questions.forEach((q) => { qMap[q] = ""; });
+      const qMap: Record<string, AnswerValue> = {};
+      data.questions.forEach((q) => {
+        if (q.type === "multiple_choice") qMap[q.id] = [];
+        else if (q.type === "rating" || q.type === "likert") qMap[q.id] = 0;
+        else if (q.type === "ranking") qMap[q.id] = [];
+        else qMap[q.id] = "";
+      });
       setQuestions(data.questions);
       setAnswers(qMap);
       setReport(null);
@@ -73,6 +78,8 @@ export default function InvoicesPage() {
     if (sortDir === null || sortDir === "desc") setSortDir("asc");
     else setSortDir("desc");
   }
+
+  const total = filtered.reduce((s, i) => s + parseFloat(i.amount || "0"), 0);
 
   const sorted: InvoiceItem[] = [...filtered].sort((a, b) => {
     if (!sortDir) return 0;
@@ -95,8 +102,6 @@ export default function InvoicesPage() {
     downloadBlob([header, ...rows].join("\n"), `invoices.csv`);
   }
 
-  const total = filtered.reduce((s, i) => s + parseFloat(i.amount || "0"), 0);
-
 function DateFilter({ items, filterStart, filterEnd, onChangeStart, onChangeEnd }: {
   items: InvoiceItem[]; filterStart: string; filterEnd: string;
   onChangeStart: (v: string) => void; onChangeEnd: (v: string) => void;
@@ -105,14 +110,16 @@ function DateFilter({ items, filterStart, filterEnd, onChangeStart, onChangeEnd 
   const allDatesSorted = useMemo(() => [...dateSet].sort(), [dateSet]);
   const years = useMemo(() => [...new Set(allDatesSorted.map((d) => d.substring(0, 4)))].sort(), [allDatesSorted]);
 
+  const monthsInYear = useCallback((year: string) => {
+    return [...new Set(allDatesSorted.filter((d) => d.startsWith(year)).map((d) => d.substring(4, 6)))].sort();
+  }, [allDatesSorted]);
+
   const [sYear, setSYear] = useState(filterStart?.substring(0, 4) || "");
   const [sMonth, setSMonth] = useState(filterStart?.substring(4, 6) || "");
   const [sDay, setSDay] = useState(filterStart?.substring(6, 8) || "");
   const [eYear, setEYear] = useState(filterEnd?.substring(0, 4) || "");
   const [eMonth, setEMonth] = useState(filterEnd?.substring(4, 6) || "");
   const [eDay, setEDay] = useState(filterEnd?.substring(6, 8) || "");
-
-  const allMonths = ["01","02","03","04","05","06","07","08","09","10","11","12"];
 
   function daysInMonth(y: string, m: string) {
     return new Date(parseInt(y), parseInt(m), 0).getDate();
@@ -122,20 +129,21 @@ function DateFilter({ items, filterStart, filterEnd, onChangeStart, onChangeEnd 
     return Array.from({ length: n }, (_, i) => String(i + 1).padStart(2, "0"));
   }
 
-  const availSMonths = useMemo(() => sYear ? allMonths : [], [sYear]);
+  const availSMonths = useMemo(() => sYear ? monthsInYear(sYear) : [], [sYear, monthsInYear]);
   const availSDays = useMemo(() => sYear && sMonth ? daysList(sYear, sMonth) : [], [sYear, sMonth]);
-  const availEMonths = useMemo(() => eYear ? allMonths : [], [eYear]);
+  const availEMonths = useMemo(() => eYear ? monthsInYear(eYear) : [], [eYear, monthsInYear]);
   const availEDays = useMemo(() => eYear && eMonth ? daysList(eYear, eMonth) : [], [eYear, eMonth]);
 
-  function commitStart() {
-    if (sYear && sMonth && sDay) {
-      const d = sYear + sMonth + sDay;
-      onChangeStart(d);
-      if (d > filterEnd) { setEYear(sYear); setEMonth(sMonth); setEDay(sDay); onChangeEnd(d); }
+  function commitStart(year: string, month: string, day: string) {
+    const d = year + month + day;
+    if (filterEnd && d > filterEnd) {
+      setEYear(year); setEMonth(month); setEDay(day);
+      onChangeEnd(d);
     }
+    onChangeStart(d);
   }
-  function commitEnd() {
-    if (eYear && eMonth && eDay) onChangeEnd(eYear + eMonth + eDay);
+  function commitEnd(year: string, month: string, day: string) {
+    onChangeEnd(year + month + day);
   }
 
   interface SelProps { label: string; value: string; options: string[]; onChange: (v: string) => void; disabled?: boolean; }
@@ -152,20 +160,29 @@ function DateFilter({ items, filterStart, filterEnd, onChangeStart, onChangeEnd 
     );
   }
 
+  const invalid = filterStart && filterEnd && filterStart > filterEnd;
+
+  console.log({ filterStart, filterEnd, invalid });
+
   return (
-    <div className="flex gap-6 mb-4 items-end flex-wrap">
-      <div className="flex gap-2 items-end">
-        <span className="text-xs text-gray-500 pb-1.5">開始</span>
-        <DateSel label="年" value={sYear} options={years} onChange={(v) => { setSYear(v); setSMonth(""); setSDay(""); }} />
-        <DateSel label="月" value={sMonth} options={availSMonths} onChange={(v) => { setSMonth(v); const first = availSDays.length ? availSDays[0] : ""; setSDay(first); if (sYear && v && first) onChangeStart(sYear + v + first); }} />
-        <DateSel label="日" value={sDay} options={availSDays} onChange={(v) => { setSDay(v); if (sYear && sMonth && v) onChangeStart(sYear + sMonth + v); }} />
+    <div>
+      <div className="flex gap-6 mb-2 items-end flex-wrap">
+        <div className="flex gap-2 items-end">
+          <span className="text-xs text-gray-500 pb-1.5">開始</span>
+          <DateSel label="年" value={sYear} options={years} onChange={(v) => { setSYear(v); setSMonth(""); setSDay(""); }} />
+          <DateSel label="月" value={sMonth} options={availSMonths} onChange={(v) => { setSMonth(v); setSDay(""); }} />
+          <DateSel label="日" value={sDay} options={availSDays} onChange={(v) => { setSDay(v); if (sYear && sMonth) commitStart(sYear, sMonth, v); }} />
+        </div>
+        <div className="flex gap-2 items-end">
+          <span className="text-xs text-gray-500 pb-1.5">結束</span>
+          <DateSel label="年" value={eYear} options={years} onChange={(v) => { setEYear(v); setEMonth(""); setEDay(""); }} />
+          <DateSel label="月" value={eMonth} options={availEMonths} onChange={(v) => { setEMonth(v); setEDay(""); }} />
+          <DateSel label="日" value={eDay} options={availEDays} onChange={(v) => { setEDay(v); if (eYear && eMonth) commitEnd(eYear, eMonth, v); }} />
+        </div>
       </div>
-      <div className="flex gap-2 items-end">
-        <span className="text-xs text-gray-500 pb-1.5">結束</span>
-        <DateSel label="年" value={eYear} options={years} onChange={(v) => { setEYear(v); setEMonth(""); setEDay(""); }} />
-        <DateSel label="月" value={eMonth} options={availEMonths} onChange={(v) => { setEMonth(v); setEDay(""); }} />
-        <DateSel label="日" value={eDay} options={availEDays} onChange={(v) => { setEDay(v); commitEnd(); }} />
-      </div>
+      {invalid && (
+        <p className="text-red-500 text-xs mb-3">起始日期不能晚於結束日期</p>
+      )}
     </div>
   );
 }

@@ -1,5 +1,15 @@
 import { createContext } from "react";
 
+export type QuestionType = "text" | "single_choice" | "multiple_choice" | "rating" | "ranking" | "likert";
+
+export interface Question {
+  id: string;
+  text: string;
+  type: QuestionType;
+  options: string[];
+  required: boolean;
+}
+
 export interface InvoiceItem {
   invNum: string;
   invDate: string;
@@ -16,6 +26,8 @@ export interface ReportType {
   stress_top3: string[];
   suggestions: string[];
 }
+
+export type AnswerValue = string | string[] | number;
 
 export interface AppContextType {
   accessToken: string;
@@ -46,10 +58,10 @@ export interface AppContextType {
   setCarrierId: (v: string) => void;
   email: string;
   setEmail: (v: string) => void;
-  questions: string[];
-  setQuestions: (v: string[]) => void;
-  answers: Record<string, string>;
-  setAnswers: (v: Record<string, string> | ((prev: Record<string, string>) => Record<string, string>)) => void;
+  questions: Question[];
+  setQuestions: (v: Question[]) => void;
+  answers: Record<string, AnswerValue>;
+  setAnswers: (v: Record<string, AnswerValue> | ((prev: Record<string, AnswerValue>) => Record<string, AnswerValue>)) => void;
   report: ReportType | null;
   setReport: (v: ReportType | null) => void;
   qsSessionId: string;

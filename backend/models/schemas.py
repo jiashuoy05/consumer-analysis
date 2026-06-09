@@ -1,5 +1,6 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Union
+from enum import Enum
 
 
 class InvoiceItem(BaseModel):
@@ -39,9 +40,28 @@ class ClassifiedExpense(BaseModel):
     invoiceTime: str
 
 
+class QuestionType(str, Enum):
+    TEXT = "text"
+    SINGLE_CHOICE = "single_choice"
+    MULTIPLE_CHOICE = "multiple_choice"
+    RATING = "rating"
+    RANKING = "ranking"
+    LIKERT = "likert"
+
+
+class Question(BaseModel):
+    id: str
+    text: str
+    type: QuestionType
+    options: list[str] = []
+    required: bool = True
+
+
 class QuestionnaireAnswer(BaseModel):
-    question: str
-    answer: str
+    question_id: str
+    question_text: str
+    question_type: QuestionType
+    answer: Union[str, list[str], int]
 
 
 class UserSession(BaseModel):

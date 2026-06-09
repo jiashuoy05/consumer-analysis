@@ -26,9 +26,9 @@ consumer-analysis/
 │   ├── requirements.txt
 │   ├── models/schemas.py      # Pydantic models
 │   ├── services/
-│   │   ├── llm_service.py     # LangGraph flow: classify → questions → report
+│   │   ├── llm_service.py     # LangGraph flow: classify → questions → report; Tavily search
 │   │   ├── scraper.py         # Playwright login + scrapes month by month
-│   │   ├── report_generator.py  # matplotlib pie chart + python-docx + fpdf2 + SMTP email
+│   │   ├── report_generator.py  # Markdown 報告格式化 + SMTP email 寄送
 │   └── api/
 │       ├── routes.py          # POST /session/start, /session/answer, /report/send, etc.
 │       └── scraper_routes.py  # POST /scraper/login-and-scrape, /scraper/refresh, /scraper/me
@@ -39,8 +39,8 @@ consumer-analysis/
     │   ├── pages/
     │   │   ├── LoginPage.tsx  # phone+password → /scraper/login-and-scrape
     │   │   ├── InvoicesPage.tsx  # date-filtered invoice table + start survey
-    │   │   ├── SurveyPage.tsx # LLM-generated questions (textarea)
-    │   │   └── ReportPage.tsx # report display + DOCX/PDF download + email send
+    │   │   ├── SurveyPage.tsx # LLM-generated questions (text/single_choice/multiple_choice/rating/ranking/likert)
+    │   │   └── ReportPage.tsx # report display + email send
     │   ├── context/AppContext.ts  # all shared state (token, items, report, etc.)
     │   ├── components/ErrorBanner.tsx
     │   └── utils/
@@ -64,5 +64,6 @@ consumer-analysis/
 - **Tailwind v4.** Uses `@import "tailwindcss"` in CSS and `@tailwindcss/vite` plugin.
 - **`Authorization: Bearer` header.** `ACCESS_TTL = 1800s`, `REFRESH_TTL = 86400s`.
 - **GEMINI_MODEL** in `.env` set to `gemini-2.5-flash`.
-- **PDF fonts.** fpdf2 uses Times New Roman + 標楷體 fallback. Matplotlib uses `kaiu.ttf`.
+- **Structured questions.** LLM generates JSON with `id`, `text`, `type` (text/single_choice/multiple_choice/rating/ranking/likert), and `options`. Frontend renders per type. Answers use `question_id` key.
+- **No DOCX/PDF/charts.** Report is formatted as Markdown and sent via email body only.
 - **Frontend proxies `/api` to backend.** `vite.config.ts` proxies `/api` → `http://127.0.0.1:8000`.

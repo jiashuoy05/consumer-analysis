@@ -17,7 +17,7 @@ LLM 動態生成個人化問卷
   ↓
 LLM 生成「消費幸福感報告」（幸福 Top3 / 壓力 Top3 / 建議）
   ↓
-下載 DOCX / PDF，或 Email 寄送
+Email 寄送 Markdown 報告
 ```
 
 ## 技術架構
@@ -28,7 +28,7 @@ LLM 生成「消費幸福感報告」（幸福 Top3 / 壓力 Top3 / 建議）
 | LLM 框架 | LangChain + LangGraph |
 | LLM 模型 | Gemini 2.5 Flash |
 | 發票爬蟲 | Playwright + stealth + ddddocr |
-| 報告產生 | matplotlib + python-docx + fpdf2 |
+| 報告產生 | Markdown + SMTP Email |
 | 郵件寄送 | SMTP (Gmail) |
 | 前端 | React 19 + Vite + Tailwind CSS v4 (TypeScript) |
 | 資料儲存 | IndexedDB（發票明細）、localStorage（token） |
@@ -125,8 +125,7 @@ npm run dev
 |------|------|------|
 | POST | `/api/v1/session/start` | 啟動 LLM 分類 + 生成問卷 |
 | POST | `/api/v1/session/answer` | 提交回答，生成報告 |
-| POST | `/api/v1/report/send` | 產生 DOCX/PDF 並 Email 寄送 |
-| GET  | `/api/v1/report/download/{id}/{fmt}` | 下載 DOCX 或 PDF |
+| POST | `/api/v1/report/send` | 將 Markdown 報告寄送至 Email |
 
 ## 授權
 

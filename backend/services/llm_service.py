@@ -1,4 +1,5 @@
 import os
+from datetime import date
 from typing import TypedDict, Optional
 import uuid as uuid_lib
 from pathlib import Path
@@ -7,21 +8,31 @@ from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
+from tavily import TavilyClient
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+
+_tavily: Optional[TavilyClient] = None
+
+def _get_tavily() -> Optional[TavilyClient]:
+    global _tavily
+    if _tavily is None and TAVILY_API_KEY:
+        _tavily = TavilyClient(api_key=TAVILY_API_KEY)
+    return _tavily
 
 from backend.models.schemas import (
-    ClassifiedExpense, HappinessReport,
+    ClassifiedExpense, HappinessReport, Question, QuestionType,
 )
 
 
 class GraphState(TypedDict):
     items: list[dict]
     classified: list[ClassifiedExpense]
-    questions: list[str]
+    questions: list[Question]
     answers: dict
     report: Optional[HappinessReport]
     error: Optional[str]
@@ -67,6 +78,9 @@ def classify_items_with_llm(items: list[str]) -> list[str]:
 def classify_expenses_node(state: GraphState) -> dict:
     items = state.get("items", [])
     if not items:
+        existing = state.get("classified")
+        if existing:
+            return {"classified": existing}
         return {"classified": []}
 
     descriptions = [it.get("description", "") for it in items]
@@ -85,8 +99,48 @@ def classify_expenses_node(state: GraphState) -> dict:
     return {"classified": classified}
 
 
+_QUESTION_GEN_PROMPT = """你是一位 empathetic 的財務幸福感教練。以下是使用者的消費明細分類：
+
+各類別總金額：
+{cat_summary}
+
+逐筆明細：
+{items_str}
+
+請根據以上的消費模式，產生 **8 個互動式問卷問題**，混合以下題型：
+1. **text** — 開放式文字回答
+2. **single_choice** — 單選題（提供 3~5 個選項）
+3. **multiple_choice** — 複選題（提供 4~6 個選項）
+4. **rating** — 評分題（1~5 分）
+5. **likert** — 李克特量表（提供 5 個同意程度選項）
+6. **ranking** — 排序題（提供 4~5 個項目排序）
+
+問題要具體、個人化（參考實際消費項目），不要泛泛而談。
+每題的 id 為 q_1 ~ q_8。
+直接輸出 JSON 陣列，格式如下，不要其他說明：
+[
+  {{
+    "id": "q_1",
+    "text": "問題文字",
+    "type": "text",
+    "options": [],
+    "required": true
+  }},
+  {{
+    "id": "q_2",
+    "text": "問題文字",
+    "type": "single_choice",
+    "options": ["選項1", "選項2", "選項3"],
+    "required": true
+  }}
+]"""
+
+
 def generate_questions_node(state: GraphState) -> dict:
     classified = state["classified"]
+    # If we already have answers (report phase), preserve existing questions
+    if state.get("answers") and state.get("questions"):
+        return {"questions": state["questions"]}
     cat_totals = {}
     for exp in classified:
         cat_totals.setdefault(exp.category, 0)
@@ -98,47 +152,95 @@ def generate_questions_node(state: GraphState) -> dict:
         for exp in classified
     )
 
-    prompt = f"""你是一位 empathetic 的財務幸福感教練。以下是使用者的消費明細分類：
-
-各類別總金額：
-{cat_summary}
-
-逐筆明細：
-{items_str}
-
-請根據以上的消費模式，產生 **5 個互動式問卷問題**，目的是了解：
-1. 使用者在各項支出中的主觀感受（值得 vs 後悔）
-2. 哪些消費帶來快樂、哪些帶來壓力
-3. 消費是否與個人價值觀一致
-
-問題要具體、個人化（參考實際消費項目），不要泛泛而談。直接輸出 5 個問題，每個問題一行，不要編號。"""
+    prompt = _QUESTION_GEN_PROMPT.format(cat_summary=cat_summary, items_str=items_str)
 
     llm = _get_llm()
     resp = llm.invoke(prompt)
-    questions = [q.strip() for q in resp.content.strip().split("\n") if q.strip()][:5]
+    content = resp.content.strip()
+    if content.startswith("```"):
+        content = content.split("\n", 1)[1].rsplit("\n", 1)[0]
+        if content.endswith("```"):
+            content = content[:-3]
+    import json
+    try:
+        questions_data = json.loads(content)
+    except json.JSONDecodeError:
+        questions_data = json.loads(content.replace("'", '"'))
+    questions = []
+    for qd in questions_data[:8]:
+        q_type = QuestionType(qd.get("type", "text"))
+        questions.append(Question(
+            id=qd.get("id", f"q_{len(questions)+1}"),
+            text=qd["text"],
+            type=q_type,
+            options=qd.get("options", []),
+            required=qd.get("required", True),
+        ))
     return {"questions": questions}
+
+
+def _fg(exp, key, default=""):
+    if isinstance(exp, dict):
+        return exp.get(key, default)
+    return getattr(exp, key, default)
 
 
 def generate_report_node(state: GraphState) -> dict:
     classified = state["classified"]
     answers = state["answers"]
+    questions = state.get("questions", [])
 
     lines = []
     for exp in classified:
-        lines.append(f"  [{exp.category}] {exp.sellerName} - {exp.description} ${exp.amount}")
+        lines.append(f"  [{_fg(exp, 'category')}] {_fg(exp, 'sellerName')} - {_fg(exp, 'description')} ${_fg(exp, 'amount')}")
     classified_str = "\n".join(lines)
 
-    qa_text = "\n".join(
-        f"Q: {q}\nA: {a}" for q, a in answers.items()
-    )
+    cat_totals = {}
+    for exp in classified:
+        cat = _fg(exp, "category", "其他")
+        cat_totals[cat] = cat_totals.get(cat, 0) + float(_fg(exp, "amount", 0) or 0)
+
+    qa_lines = []
+    for q in questions:
+        q_id = _fg(q, "id", str(q)) if not isinstance(q, dict) else q.get("id", str(q))
+        q_text = _fg(q, "text", str(q)) if not isinstance(q, dict) else q.get("text", str(q))
+        a_text = answers.get(q_id, "??")
+        qa_lines.append(f"Q ({q_id}): {q_text}\nA: {a_text}")
+    qa_text = "\n".join(qa_lines)
+
+    market_info = ""
+    tavily = _get_tavily()
+    if tavily:
+        try:
+            year = date.today().year
+            top_cat = max(cat_totals, key=cat_totals.get) if cat_totals else ""
+            searches = [
+                f"台灣 平均消費支出 {year} 統計",
+                f"台灣 每人每月平均{top_cat}支出 {year}",
+                f"台灣{top_cat}類 月平均花費 統計",
+            ]
+            results = []
+            for q in searches:
+                r = tavily.search(query=q, max_results=1)
+                if r and "results" in r:
+                    for item in r["results"][:1]:
+                        results.append(f"- {item.get('title','')}: {item.get('content','')}")
+            if results:
+                market_info = "\n搜尋到的市場參考資料：\n" + "\n".join(results[:8])
+        except Exception:
+            pass
 
     prompt = f"""以下是使用者的消費明細分類與問卷回答，請根據這些資訊產生一份「消費幸福感報告」。
 
 消費分類與金額：
 {classified_str}
 
-問卷對話：
+各類別總金額：
+{chr(10).join(f'  {k}: 共 ${v:.0f}' for k, v in sorted(cat_totals.items()))}
+
+問卷對話（包含題型與回答）：
 {qa_text}
+{market_info}
 
 請輸出以下 JSON 格式（嚴格遵守，不要多加說明）：
 {{
@@ -187,14 +289,15 @@ async def run_question_phase(
         "error": None,
     }
 
-    result_questions = []
+    result_questions: list[Question] = []
     result_classified = []
 
     async for event in graph.astream(initial_state, config):
         for node_name, state_data in event.items():
+            if node_name == "classify_expenses":
+                result_classified = state_data.get("classified", [])
             if node_name == "generate_questions":
                 result_questions = state_data.get("questions", [])
-                result_classified = state_data.get("classified", [])
                 break
 
     return {
@@ -205,14 +308,14 @@ async def run_question_phase(
 
 
 async def run_report_phase(thread_id: str, classified: list,
-                           answers: dict) -> HappinessReport:
+                           answers: dict, questions: list) -> HappinessReport:
     graph = build_graph()
     config = {"configurable": {"thread_id": thread_id}}
 
     state: GraphState = {
         "items": [],
         "classified": classified,
-        "questions": list(answers.keys()),
+        "questions": questions,
         "answers": answers,
         "report": None,
         "error": None,

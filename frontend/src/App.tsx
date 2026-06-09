@@ -8,7 +8,7 @@ import SurveyPage from "./pages/SurveyPage";
 import ReportPage from "./pages/ReportPage";
 
 import { API } from "./config";
-import { AppContext, type AppContextType, type InvoiceItem, type ReportType } from "./context/AppContext";
+import { AppContext, type AppContextType, type InvoiceItem, type ReportType, type Question, type AnswerValue } from "./context/AppContext";
 import { dbGet, dbSet, dbClear } from "./utils/db";
 
 const now = new Date();
@@ -38,8 +38,8 @@ function AppProvider() {
   const [items, setItems] = useState<InvoiceItem[]>([]);
   const [carrierId, setCarrierId] = useState("");
   const [email, setEmail] = useState("");
-  const [questions, setQuestions] = useState<string[]>([]);
-  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [answers, setAnswers] = useState<Record<string, AnswerValue>>({});
   const [report, setReport] = useState<ReportType | null>(null);
   const [qsSessionId, setQsSessionId] = useState("");
   const [error, setError] = useState("");
